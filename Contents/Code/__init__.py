@@ -1,7 +1,7 @@
 PREFIX = '/video/paramount'
 TITLE = 'Paramount Network'
 ART = 'art-default.jpg'
-ICON = 'icon-default.png'
+ICON = 'icon-default.jpg'
 BASE_URL = 'http://www.paramountnetwork.com/'
 
 # Pull the json from the HTML content to prevent any issues with redirects and/or bad urls
