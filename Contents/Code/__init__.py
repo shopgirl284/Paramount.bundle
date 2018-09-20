@@ -2,11 +2,7 @@ PREFIX = '/video/paramount'
 TITLE = 'Paramount Network'
 ART = 'art-default.jpg'
 ICON = 'icon-default.jpg'
-BASE_URL = 'http://www.paramountnetwork.com/'
-
-# Pull the json from the HTML content to prevent any issues with redirects and/or bad urls
-RE_MANIFEST_URL = Regex('var triforceManifestURL = "(.+?)";', Regex.DOTALL)
-RE_MANIFEST = Regex('var triforceManifestFeed = (.+?);', Regex.DOTALL)
+BASE_URL = 'http://www.paramountnetwork.com'
 
 FULLEP_API = 'http://www.paramountnetwork.com/api/episodes/1/18'
 RE_JSON = Regex('window.__DATA__ = (.+?)\n', Regex.DOTALL)
