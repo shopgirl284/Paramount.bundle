@@ -13,13 +13,37 @@ SEARCH_TYPE = ['Video', 'Episode', 'Series']
 RE_SXX_EXX = Regex('season-(\d+)-ep-(\d+)')
 RE_SXX_EXX2 = Regex('S(\d+) E(\d+)')
 
+URI = 'mgid:arc:episode:paramountnetwork.com:%s'
+META_URL = 'http://media.mtvnservices.com/pmt/e1/access/index.html?uri=%s&configtype=edge'
+RE_B = Regex('(&__b__=)\d+')
+
+# Below items are no longer used but provide regex for URI in a video page and the media RSS feed
+# if needed later
+#RE_MGID = Regex('config":{"uri":"(.+?)"', Regex.DOTALL)
+#MRSS_URL = 'http://www.paramountnetwork.com/feeds/mrss?uri=mgid:arc:episode:paramountnetwork.com:%s&isEpisode=true'
+
 ###################################################################################################
 def Start():
 
     ObjectContainer.title1 = 'Paramount Network'
     DirectoryObject.thumb = R(ICON)
+	
     HTTP.CacheTime = CACHE_1HOUR
-    HTTP.Headers['User-Agent'] = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_10_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/39.0.2171.95 Safari/537.36'
+    HTTP.Headers['User-Agent'] = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_13_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/12.0.2 Safari/605.1.15'
+
+    Dict['episodes'] = {}
+
+    try:
+        json_obj = JSON.ObjectFromURL('http://ip-api.com/json', headers=HTTP_HEADERS, cacheTime=10)
+    except:
+        Log("IP Address Check Failed")
+        json_obj = None
+
+    if json_obj and 'countryCode' in json_obj and json_obj['countryCode'] != 'US':
+        Log("= WARNING ==========================================================================================")
+        Log("  According to your IP address you are not in the United States.")
+        Log("  Due to geo-blocking by the content provider, this channel does not work outside the United States.")
+        Log("====================================================================================================")
 
 ####################################################################################################
 @handler(PREFIX, TITLE, art=ART, thumb=ICON)
@@ -143,6 +167,9 @@ def VideoList(title, url, show_title=''):
 
     for video in json['items']:
 
+        try: content_id = video['id']
+        except: continue
+
         try: vid_url = video['url']
         except: continue
 
@@ -171,17 +198,19 @@ def VideoList(title, url, show_title=''):
             try: (season, episode) = RE_SXX_EXX2.search(video['meta']['label'][1]['title']).groups()
             except: (season, episode) = ('0', '0')
 
-        oc.add(EpisodeObject(
-            url = vid_url, 
-            show = show,
-            season = int(season) if season else None,
-            index = int(episode) if episode else None,
-            title = title, 
-            thumb = Resource.ContentsOfURLWithFallback(url=thumb),
-            originally_available_at = Datetime.ParseDate(video['meta']['date']),
-            duration = Datetime.MillisecondsFromString(video['media']['duration']),
-            summary = video['meta']['description']
-        ))
+        if content_id not in Dict['episodes']:
+            Dict['episodes'][content_id] = {
+                'url': vid_url,
+                'show': show,
+                'title': title,
+                'originally_available_at': Datetime.ParseDate(video['meta']['date']).date(),
+                'season': int(season) if season else None,
+                'index': int(episode) if episode else None,
+                'duration': Datetime.MillisecondsFromString(video['media']['duration']),
+                'summary': video['meta']['description'],
+                'thumb': thumb
+            }
+        oc.add(CreateEpisodeObject(content_id=content_id))
 
     try: next_page = BASE_URL + json['loadMore']['url']
     except: next_page = None
@@ -221,7 +250,7 @@ def SearchSections(title, query):
     return oc
 
 ####################################################################################################
-# This function produces the show or video results for a each search section
+# This function produces the results for a each search section
 @route(PREFIX + '/search', page=int)
 def Search(title, url, page=0, search_type=''):
 
@@ -257,6 +286,7 @@ def Search(title, url, page=0, search_type=''):
 
         # For Episodes and Video Clips
         else:
+            content_id = item['id']
             label_list = item['meta']['label']
 
             # For Video Clips
@@ -282,17 +312,19 @@ def Search(title, url, page=0, search_type=''):
                 full_title = '%s: %s' % (item_title, item['meta']['subHeader'])
                 (season, episode) = RE_SXX_EXX2.search(item_title).groups()
 
-            oc.add(EpisodeObject(
-                url = item_url, 
-                show = show, 
-                title = full_title, 
-                thumb = Resource.ContentsOfURLWithFallback(url=thumb),
-                summary = item['meta']['description'], 
-                season = int(season) if season else None, 
-                index = int(episode) if episode else None,
-                duration = Datetime.MillisecondsFromString(item['media']['duration']), 
-                originally_available_at = Datetime.ParseDate(item['meta']['date'])
-            ))
+            if content_id not in Dict['episodes']:
+                Dict['episodes'][content_id] = { 
+                    'url': item_url,
+                    'show': show,
+                    'title': full_title,
+                    'originally_available_at': Datetime.ParseDate(item['meta']['date']),
+                    'season': int(season) if season else None,
+                    'index': int(episode) if episode else None,
+                    'duration': Datetime.MillisecondsFromString(item['media']['duration']),
+                    'summary': item['meta']['description'],
+                    'thumb': thumb
+            }
+            oc.add(CreateEpisodeObject(content_id=content_id))
 
     if json['metadata']['startingRow']+16 < json['metadata']['numFound']:
 
@@ -305,3 +337,177 @@ def Search(title, url, page=0, search_type=''):
         return ObjectContainer(header="Empty", message="There are no results to list.")
     else:
         return oc
+####################################################################################################
+@route(PREFIX + '/create_episodeobject', include_container=bool)
+def CreateEpisodeObject(content_id, include_container=False, **kwargs):
+
+    episode = Dict['episodes'][content_id]
+
+    # Only pull the media parts data if this is the second run through the function
+    if include_container:
+        part_objects = Parts(content_id=content_id)
+    else:
+        part_objects = [PartObject()]
+		
+    episode_obj = EpisodeObject(
+        key = Callback(CreateEpisodeObject, content_id=content_id, include_container=True),
+        rating_key = "paramount:{}".format(content_id),
+        show = episode['show'],
+        title = episode['title'],
+        originally_available_at = episode['originally_available_at'],
+        season = episode['season'],
+        index = episode['index'],
+        duration = episode['duration'],
+        summary = episode['summary'],
+        thumb = episode['thumb'],
+        items = [
+            MediaObject(
+                parts = part_objects,
+                video_resolution = '720',
+                audio_channels = 2,
+                optimized_for_streaming = True
+            )
+        ]
+    )
+
+    if include_container:
+        return ObjectContainer(objects=[episode_obj])
+    else:
+        return episode_obj
+		
+####################################################################################################
+# Function to build the parts for the media objects
+@route(PREFIX + '/parts')
+def Parts(content_id, **kwargs):
+
+    episode = Dict['episodes'][content_id]
+    vid_uri = URI %content_id
+
+    json_obj = JSON.ObjectFromURL(META_URL %vid_uri, cacheTime=CACHE_1HOUR, headers={'Referer': episode['url']})['feed']
+    part_objects = []
+
+    # Check for geoblocks or errors
+    if not 'items' in json_obj:
+
+        if 'errorSlateURL' in json_obj and 'video_loc_' in json_obj['errorSlateURL']:
+            Log('Media Geoblocked')
+            raise Ex.MediaGeoblocked
+        else:
+            Log('Media Not Available')
+            raise Ex.MediaNotAvailable
+
+    for item in json_obj['items']:
+
+        if item['duration'] < 8:
+            continue
+
+        media_url = item['group']['content'].replace('{device}', 'iPad') + '&format=json'
+        if media_url.startswith('//'):
+            media_url = 'http:' + media_url
+        elif media_url.startswith('https://'):
+            media_url = media_url.replace('https://', 'http://')
+
+        json_obj = JSON.ObjectFromURL(media_url, cacheTime=CACHE_1HOUR)
+
+        if not 'rendition' in json_obj['package']['video']['item'][0]:
+            continue
+
+        try:
+            part_hls_url = RE_B.sub(r'\g<1>5000', json_obj['package']['video']['item'][0]['rendition'][0]['src'])
+            part_duration = json_obj['package']['video']['item'][0]['rendition'][0]['duration']
+
+            part_objects.append(
+                PartObject(
+                    key = HTTPLiveStreamURL(part_hls_url),
+                    duration = int(part_duration)*1000
+                )
+            )
+        except:
+            continue
+
+    if len(part_objects) < 1:
+        raise Ex.MediaNotAvailable
+
+    return part_objects
+
+####################################################################################################
+# Original version of the CreateEpisodeObject function. This includes the code to pull the media parts
+# used in the Services bundle, but the @deferred that was originally used will not work here
+@route(PREFIX + '/create_episodeobjectold', include_container=bool)
+#@deferred
+def CreateEpisodeObjectOld(content_id, include_container=False, **kwargs):
+
+    episode = Dict['episodes'][content_id]
+    vid_uri = URI %content_id
+
+    json_obj = JSON.ObjectFromURL(META_URL %vid_uri, cacheTime=CACHE_1HOUR, headers={'Referer': episode['url']})['feed']
+    part_objects = []
+
+    # Check for geoblocks or errors
+    if not 'items' in json_obj:
+
+        if 'errorSlateURL' in json_obj and 'video_loc_' in json_obj['errorSlateURL']:
+            Log('Media Geoblocked')
+            raise Ex.MediaGeoblocked
+        else:
+            Log('Media Not Available')
+            raise Ex.MediaNotAvailable
+
+    for item in json_obj['items']:
+
+        if item['duration'] < 8:
+            continue
+
+        media_url = item['group']['content'].replace('{device}', 'iPad') + '&format=json'
+        if media_url.startswith('//'):
+            media_url = 'http:' + media_url
+        elif media_url.startswith('https://'):
+            media_url = media_url.replace('https://', 'http://')
+
+        json_obj = JSON.ObjectFromURL(media_url, cacheTime=CACHE_1HOUR)
+
+        if not 'rendition' in json_obj['package']['video']['item'][0]:
+            continue
+
+        try:
+            part_hls_url = RE_B.sub(r'\g<1>5000', json_obj['package']['video']['item'][0]['rendition'][0]['src'])
+            part_duration = json_obj['package']['video']['item'][0]['rendition'][0]['duration']
+
+            part_objects.append(
+                PartObject(
+                    key = HTTPLiveStreamURL(part_hls_url),
+                    duration = int(part_duration)*1000
+                )
+            )
+        except:
+            continue
+
+    if len(part_objects) < 1:
+        raise Ex.MediaNotAvailable
+
+    episode_obj = EpisodeObject(
+        key = Callback(CreateEpisodeObject, content_id=content_id, include_container=True),
+        rating_key = "paramount:{}".format(content_id),
+        show = episode['show'],
+        title = episode['title'],
+        originally_available_at = episode['originally_available_at'],
+        season = episode['season'],
+        index = episode['index'],
+        duration = episode['duration'],
+        summary = episode['summary'],
+        thumb = episode['thumb'],
+        items = [
+            MediaObject(
+                parts = part_objects,
+                video_resolution = '720',
+                audio_channels = 2,
+                optimized_for_streaming = True
+            )
+        ]
+    )
+
+    if include_container:
+        return ObjectContainer(objects=[episode_obj])
+    else:
+        return episode_obj
+		
